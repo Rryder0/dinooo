@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SWP08 - AI 體感小恐龍跳躍遊戲 (Teachable Machine)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- TensorFlow.js & Teachable Machine Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Noto+Sans+TC:wght@400;700&display=swap');
+
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+
+        .pixel-font {
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+
+        .jump-flash {
+            animation: flashGreen 0.25s ease-out;
+        }
+
+        @keyframes flashGreen {
+            0% { box-shadow: 0 0 0 0px rgba(34, 197, 94, 0.6); }
+            50% { box-shadow: 0 0 25px 8px rgba(34, 197, 94, 0.8); }
+            100% { box-shadow: 0 0 0 0px rgba(34, 197, 94, 0); }
+        }
+
+        canvas {
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between bg-slate-900 text-slate-100 antialiased selection:bg-emerald-500 selection:text-slate-950">
+
+    <!-- Header -->
+    <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-40 px-4 py-3">
+        <div class="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-4">
+            <div class="flex items-center gap-3">
+                <span class="text-3xl">🦖</span>
+                <div>
+                    <h1 class="text-lg font-bold text-emerald-400 pixel-font tracking-wider">SWP08 DINO AI</h1>
+                    <p class="text-xs text-slate-400">姿勢/影像辨識互動小恐龍跑酷遊戲</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button id="btn-guide" class="bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center gap-1.5 shadow-lg shadow-indigo-600/20">
+                    <i class="fa-solid fa-graduation-cap"></i> 訓練教學與作業規範
+                </button>
+                <a href="https://teachablemachine.withgoogle.com/train/pose" target="_blank" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center gap-1.5 border border-slate-700">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Teachable Machine
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="max-w-7xl mx-auto w-full p-4 flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        
+        <!-- Left Panel: Game Canvas Area (7 Cols) -->
+        <section class="lg:col-span-7 flex flex-col gap-4">
+            
+            <!-- Game Wrapper -->
+            <div id="game-container" class="relative bg-slate-950 border-2 border-slate-700 rounded-2xl overflow-hidden shadow-2xl transition-all">
+                
+                <!-- Overlay Canvas Header / Scoreboard -->
+                <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-10 pointer-events-none">
+                    <div class="bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-lg border border-slate-800 text-xs font-mono text-slate-300">
+                        <span id="speed-display">SPEED: 1.0x</span>
+                    </div>
+                    <div class="bg-slate-900/90 backdrop-blur px-4 py-2 rounded-lg border border-slate-700 text-right">
+                        <span class="text-xs text-slate-400 pixel-font block mb-0.5">SCORE</span>
+                        <span id="score-display" class="text-xl pixel-font text-emerald-400">00000</span>
+                        <span id="highscore-display" class="text-xs text-slate-500 pixel-font block mt-1">HI: 00000</span>
+                    </div>
+                </div>
+
+                <!-- Canvas -->
+                <canvas id="dino-canvas" width="800" height="320" class="w-full h-auto block bg-slate-950"></canvas>
+
+                <!-- Game Start/Over Overlay -->
+                <div id="game-overlay" class="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col justify-center items-center gap-4 text-center p-6 z-20">
+                    <div class="text-5xl mb-2 animate-bounce">🦖</div>
+                    <h2 id="overlay-title" class="text-2xl font-bold pixel-font text-emerald-400">READY TO RUN?</h2>
+                    <p id="overlay-subtitle" class="text-sm text-slate-300 max-w-md">
+                        使用鍵盤 <kbd class="px-2 py-1 bg-slate-800 rounded text-emerald-400 border border-slate-700">Space</kbd> / <kbd class="px-2 py-1 bg-slate-800 rounded text-emerald-400 border border-slate-700">▲</kbd> 跳躍，或在右側載入 Teachable Machine AI 模型！
+                    </p>
+                    <button id="btn-start-game" class="mt-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-8 py-3 rounded-xl pixel-font transition-transform transform hover:scale-105 active:scale-95 shadow-lg shadow-emerald-500/30">
+                        START GAME
+                    </button>
+                </div>
+            </div>
+
+            <!-- Game Control Toolbar -->
+            <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4 flex flex-wrap justify-between items-center gap-4">
+                <div class="flex items-center gap-3">
+                    <button id="btn-mute" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded-lg transition">
+                        <i class="fa-solid fa-volume-high" id="mute-icon"></i> <span id="mute-text">音效: 開</span>
+                    </button>
+                    <span class="text-xs text-slate-400 border-l border-slate-700 pl-3">
+                        快捷鍵: <kbd class="bg-slate-900 px-1.5 py-0.5 rounded text-slate-300">Space</kbd> 跳躍 | <kbd class="bg-slate-900 px-1.5 py-0.5 rounded text-slate-300">Down</kbd> 蹲下
+                    </span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-950 text-emerald-400 border border-emerald-800">
+                        <span class="w-2 h-2 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span> 系統就緒
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel: AI & Webcam Controls (5 Cols) -->
+        <section class="lg:col-span-5 flex flex-col gap-4">
+            
+            <!-- Model Loader Card -->
+            <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+                <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+                    <h2 class="font-bold text-slate-200 flex items-center gap-2">
+                        <i class="fa-solid fa-robot text-indigo-400"></i> AI 模型連結設定
+                    </h2>
+                    <span id="model-status-badge" class="text-xs px-2.5 py-1 rounded-full bg-slate-700 text-slate-400 font-medium">未載入模型</span>
+                </div>
+
+                <div class="flex flex-col gap-2">
+                    <label class="text-xs text-slate-400 font-medium">Teachable Machine Model URL</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="model-url-input" 
+                            placeholder="https://teachablemachine.withgoogle.com/models/XXXXX/" 
+                            class="flex-grow bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition font-mono"
+                        />
+                        <button id="btn-load-model" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition whitespace-nowrap shadow-md shadow-indigo-600/30 flex items-center gap-1.5">
+                            <i class="fa-solid fa-cloud-arrow-down"></i> 載入
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-slate-500">
+                        *支援 Pose (姿勢) 或 Image (圖片) 辨識模型，請貼上您自訂的 Teachable Machine 匯出網址
+                    </p>
+                </div>
+            </div>
+
+            <!-- Video & AI HUD Card -->
+            <div id="ai-hud-card" class="bg-slate-800/80 border border-slate-700 rounded-2xl p-5 shadow-xl flex flex-col gap-4 relative overflow-hidden transition-all">
+                
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                    <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                        <i class="fa-solid fa-video text-rose-400"></i> 攝影機 & 即時辨識 (AI Feedback)
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <button id="btn-switch-cam" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded transition hidden" title="切換前後鏡頭">
+                            <i class="fa-solid fa-camera-rotate"></i> 切換鏡頭
+                        </button>
+                        <button id="btn-toggle-cam" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-2.5 py-1 rounded transition">
+                            開啟鏡頭
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Video + Pose Canvas Container -->
+                <div class="relative bg-slate-950 rounded-xl overflow-hidden border border-slate-700 aspect-video flex items-center justify-center">
+                    <!-- WebCam Video Element -->
+                    <video id="webcam-video" autoplay playsinline muted class="w-full h-full object-cover transform -scale-x-100 hidden"></video>
+                    <!-- Pose Skeleton Canvas -->
+                    <canvas id="pose-canvas" class="absolute inset-0 w-full h-full transform -scale-x-100 pointer-events-none hidden"></canvas>
+                    
+                    <!-- Placeholder when Cam is off -->
+                    <div id="cam-placeholder" class="flex flex-col items-center gap-2 text-slate-500 p-4 text-center">
+                        <i class="fa-solid fa-camera text-3xl text-rose-400/70"></i>
+                        <span class="text-xs text-slate-300">尚未開啟相機或相機權限被阻擋</span>
+                        <span class="text-[11px] text-slate-400 max-w-xs">提示：請確認瀏覽器網址列左側是否有相機權限封鎖，或點擊下方協助排查。</span>
+                    </div>
+
+                    <!-- Detected Action Floating Badge -->
+                    <div id="detected-action-badge" class="absolute top-3 left-3 bg-slate-900/90 border border-emerald-500/50 backdrop-blur px-3 py-1.5 rounded-lg hidden flex items-center gap-2 z-10">
+                        <span class="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-ping"></span>
+                        <span class="text-xs font-bold text-emerald-400 uppercase tracking-wide" id="action-label">ACTION: IDLE</span>
+                    </div>
+                </div>
+
+                <!-- Camera Troubleshooting Tips Box -->
+                <div id="cam-troubleshoot" class="bg-rose-950/30 border border-rose-900/50 rounded-xl p-3 text-xs text-slate-300 flex flex-col gap-2">
+                    <div class="font-bold text-rose-400 flex items-center gap-1.5">
+                        <i class="fa-solid fa-triangle-exclamation"></i> 無法使用鏡頭或偵測不到動作？請檢查以下幾點：
+                    </div>
+                    <ul class="list-disc list-inside space-y-1 text-slate-400 text-[11px]">
+                        <li><strong>HTTPS / 本地安全限制</strong>：部分瀏覽器在非 HTTPS 或非 localhost 環境下會強制封鎖攝影機。</li>
+                        <li><strong>瀏覽器權限</strong>：請點擊瀏覽器網址列左側的鎖頭或設定圖示，確認已允許網站使用「相機 (Camera)」。</li>
+                        <li><strong>其他軟體佔用</strong>：請確認 Zoom、Teams 或其他視訊軟體沒有佔用您的攝影機。</li>
+                        <li><strong>備用方案</strong>：若鏡頭真的無法開啟，您仍可隨時使用鍵盤 <kbd class="bg-slate-800 px-1 py-0.5 rounded text-slate-200">Space</kbd> / <kbd class="bg-slate-800 px-1 py-0.5 rounded text-slate-200">▲</kbd> 順暢遊玩小恐龍！</li>
+                    </ul>
+                </div>
+
+                <!-- Classification Probability Bars -->
+                <div class="flex flex-col gap-2">
+                    <div class="flex justify-between items-center text-xs text-slate-400 font-medium">
+                        <span>預測類別 (Classes)</span>
+                        <span>信心分數 (Confidence)</span>
+                    </div>
+
+                    <!-- Dynamic Prediction Bars Container -->
+                    <div id="prediction-bars-container" class="flex flex-col gap-2">
+                        <div class="text-center text-xs text-slate-500 py-4 bg-slate-900/50 rounded-lg border border-slate-800">
+                            尚未串接模型，暫無信心分數數據
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- Instruction Modal -->
+    <div id="guide-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6 shadow-2xl flex flex-col gap-5">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h3 class="text-lg font-bold text-emerald-400 flex items-center gap-2">
+                    <i class="fa-solid fa-book-open"></i> SWP08 作業指南與 Teachable Machine 步驟
+                </h3>
+                <button id="btn-close-modal" class="text-slate-400 hover:text-white transition text-xl">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4 text-sm text-slate-300 leading-relaxed">
+                <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-700">
+                    <h4 class="font-bold text-emerald-400 mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-list-check"></i> 本遊戲符合 SWP08 的四大要求：
+                    </h4>
+                    <ul class="list-disc list-inside space-y-1 text-xs text-slate-300">
+                        <li><strong>類別訓練</strong>：支援 2 種以上動作 (如: Jump 跳躍, Idle 站立/蹲下)。</li>
+                        <li><strong>鏡頭/信心分數</strong>：即時畫面顯示，以及動態條狀圖呈現百分比信心分數。</li>
+                        <li><strong>互動效果</strong>：觸發動作時產生畫面綠光脈衝、動態跳躍、聲音音效與 Log。</li>
+                        <li><strong>部署專案</strong>：單一 HTML 檔，可直接上傳並部署至 GitHub Pages！</li>
+                    </ul>
+                </div>
+
+                <h4 class="font-bold text-slate-100 text-base">📖 Teachable Machine 訓練與套用 3 步驟：</h4>
+                
+                <ol class="list-decimal list-inside space-y-3 text-xs text-slate-300">
+                    <li class="bg-slate-900/50 p-3 rounded-lg border border-slate-800">
+                        <strong class="text-slate-100">前往 Teachable Machine：</strong><br>
+                        開啟 <a href="https://teachablemachine.withgoogle.com/train/pose" target="_blank" class="text-indigo-400 underline">Teachable Machine Pose (姿勢)</a> 或 <a href="https://teachablemachine.withgoogle.com/train/image" target="_blank" class="text-indigo-400 underline">Image (圖片)</a> 專案。
+                    </li>
+                    <li class="bg-slate-900/50 p-3 rounded-lg border border-slate-800">
+                        <strong class="text-slate-100">新增並訓練 2 個類別 (Class)：</strong><br>
+                        • 類別 1 命名為 <code class="text-emerald-400 bg-slate-950 px-1.5 py-0.5 rounded">Jump</code> (代表跳躍，錄製舉手或跳躍姿勢)<br>
+                        • 類別 2 命名為 <code class="text-emerald-400 bg-slate-950 px-1.5 py-0.5 rounded">Idle</code> (代表一般狀態，錄製正常坐著/站著)
+                    </li>
+                    <li class="bg-slate-900/50 p-3 rounded-lg border border-slate-800">
+                        <strong class="text-slate-100">匯出並貼上 Model 網址：</strong><br>
+                        點選 <strong>Export Model</strong> ➔ 點擊 <strong>Upload (shareable link)</strong> ➔ 複製獲得的 URL (例如 <code class="text-indigo-300">https://teachablemachine.withgoogle.com/models/xxxx/</code>) 貼到本頁右上方輸入框即可！
+                    </li>
+                </ol>
+            </div>
+
+            <div class="pt-2 flex justify-end">
+                <button id="btn-modal-ok" class="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-5 py-2.5 rounded-lg text-xs transition">
+                    我知道了，開始體驗！
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800 bg-slate-950 py-3 px-4 text-center text-xs text-slate-500">
+        <p>SWP08 Interactive AI Game &copy; 2026 | Built with Leaflet, Canvas & Teachable Machine</p>
+    </footer>
+
+    <script>
+        /* ------------------------------------------------------------------
+           1. Web Audio API - Synthesizer Sound Effects (Zero External Files)
+        ------------------------------------------------------------------ */
+        class SoundEffects {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioCtx();
+                }
+            }
+
+            playJump() {
+                if (this.muted || !this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, this.ctx.currentTime + 0.15);
+
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.15);
+            }
+
+            playScore() {
+                if (this.muted || !this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+                osc.frequency.setValueAtTime(1200, this.ctx.currentTime + 0.08);
+
+                gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.2);
+            }
+
+            playHit() {
+                if (this.muted || !this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(40, this.ctx.currentTime + 0.25);
+
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.25);
+            }
+        }
+
+        const soundFX = new SoundEffects();
+
+        /* ------------------------------------------------------------------
+           2. Chrome Dino Canvas Game Engine
+        ------------------------------------------------------------------ */
+        const canvas = document.getElementById('dino-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game State Variables
+        let isGameRunning = false;
+        let score = 0;
+        let highScore = 0;
+        let gameSpeed = 5;
+        let frameCount = 0;
+        let animationFrameId = null;
+
+        // Dino Player Object
+        const dino = {
+            x: 50,
+            y: 200,
+            width: 44,
+            height: 48,
+            originalHeight: 48,
+            duckHeight: 26,
+            velocityY: 0,
+            gravity: 0.7,
+            jumpForce: -12.5,
+            isGrounded: true,
+            isDucking: false,
+            legFrame: 0,
+
+            jump() {
+                if (this.isGrounded) {
+                    this.velocityY = this.jumpForce;
+                    this.isGrounded = false;
+                    this.isDucking = false;
+                    this.height = this.originalHeight;
+                    soundFX.playJump();
+                    triggerJumpVisualEffect();
+                }
+            },
+
+            duck(ducking) {
+                if (!this.isGrounded) return;
+                this.isDucking = ducking;
+                if (ducking) {
+                    this.height = this.duckHeight;
+                    this.y = 248 - this.duckHeight;
+                } else {
+                    this.height = this.originalHeight;
+                    this.y = 200;
+                }
+            },
+
+            update() {
+                if (!this.isGrounded) {
+                    this.velocityY += this.gravity;
+                    this.y += this.velocityY;
+
+                    if (this.y >= 200) {
+                        this.y = 200;
+                        this.velocityY = 0;
+                        this.isGrounded = true;
+                    }
+                }
+
+                if (frameCount % 6 === 0) {
+                    this.legFrame = (this.legFrame + 1) % 2;
+                }
+            },
+
+            draw() {
+                ctx.fillStyle = '#10b981';
+
+                if (this.isDucking) {
+                    ctx.fillRect(this.x, this.y, 54, 24);
+                    ctx.fillStyle = '#022c22';
+                    ctx.fillRect(this.x + 40, this.y + 4, 4, 4);
+                    ctx.fillStyle = '#10b981';
+                    if (this.legFrame === 0) {
+                        ctx.fillRect(this.x + 10, this.y + 24, 6, 6);
+                    } else {
+                        ctx.fillRect(this.x + 36, this.y + 24, 6, 6);
+                    }
+                } else {
+                    ctx.fillRect(this.x + 10, this.y + 14, 24, 24);
+                    ctx.fillRect(this.x + 20, this.y, 24, 18);
+                    ctx.fillRect(this.x + 28, this.y + 4, 16, 10);
+                    ctx.fillStyle = '#022c22';
+                    ctx.fillRect(this.x + 26, this.y + 4, 4, 4);
+                    ctx.fillStyle = '#10b981';
+                    ctx.fillRect(this.x, this.y + 16, 12, 10);
+                    ctx.fillRect(this.x - 4, this.y + 14, 6, 6);
+                    ctx.fillRect(this.x + 32, this.y + 20, 8, 4);
+
+                    if (!this.isGrounded) {
+                        ctx.fillRect(this.x + 14, this.y + 38, 6, 8);
+                        ctx.fillRect(this.x + 26, this.y + 38, 6, 8);
+                    } else {
+                        if (this.legFrame === 0) {
+                            ctx.fillRect(this.x + 14, this.y + 38, 6, 10);
+                            ctx.fillRect(this.x + 26, this.y + 38, 6, 4);
+                        } else {
+                            ctx.fillRect(this.x + 14, this.y + 38, 6, 4);
+                            ctx.fillRect(this.x + 26, this.y + 38, 6, 10);
+                        }
+                    }
+                }
+            }
+        };
+
+        // Obstacles System
+        let obstacles = [];
+
+        class Obstacle {
+            constructor() {
+                this.type = Math.random() < 0.25 ? 'bird' : 'cactus';
+                
+                if (this.type === 'cactus') {
+                    this.width = Math.random() < 0.5 ? 20 : 36;
+                    this.height = 42;
+                    this.x = canvas.width;
+                    this.y = 248 - this.height;
+                } else {
+                    this.width = 34;
+                    this.height = 24;
+                    this.x = canvas.width;
+                    this.y = Math.random() < 0.5 ? 150 : 190;
+                    this.wingFrame = 0;
+                }
+            }
+
+            update() {
+                this.x -= gameSpeed;
+                if (this.type === 'bird' && frameCount % 10 === 0) {
+                    this.wingFrame = (this.wingFrame + 1) % 2;
+                }
+            }
+
+            draw() {
+                if (this.type === 'cactus') {
+                    ctx.fillStyle = '#f43f5e';
+                    ctx.fillRect(this.x + 6, this.y, this.width - 12, this.height);
+                    ctx.fillRect(this.x, this.y + 10, this.width, 10);
+                    ctx.fillRect(this.x, this.y + 4, 6, 12);
+                    ctx.fillRect(this.x + this.width - 6, this.y + 4, 6, 12);
+                } else {
+                    ctx.fillStyle = '#fbbf24';
+                    ctx.fillRect(this.x + 8, this.y + 8, 20, 10);
+                    ctx.fillRect(this.x, this.y + 4, 10, 8);
+                    if (this.wingFrame === 0) {
+                        ctx.fillRect(this.x + 12, this.y - 8, 8, 16);
+                    } else {
+                        ctx.fillRect(this.x + 12, this.y + 12, 8, 14);
+                    }
+                }
+            }
+        }
+
+        let horizonParticles = [];
+        for (let i = 0; i < 30; i++) {
+            horizonParticles.push({
+                x: Math.random() * 800,
+                y: Math.random() * 200,
+                size: Math.random() * 2 + 1,
+                speed: Math.random() * 0.5 + 0.2
+            });
+        }
+
+        function gameLoop() {
+            if (!isGameRunning) return;
+
+            frameCount++;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 248);
+            ctx.lineTo(canvas.width, 248);
+            ctx.stroke();
+
+            ctx.fillStyle = '#475569';
+            horizonParticles.forEach(p => {
+                p.x -= p.speed * (gameSpeed / 5);
+                if (p.x < 0) p.x = canvas.width;
+                ctx.fillRect(p.x, p.y, p.size, p.size);
+            });
+
+            dino.update();
+            dino.draw();
+
+            if (frameCount % Math.max(50, Math.floor(1200 / (gameSpeed * 10))) === 0) {
+                if (Math.random() < 0.7) {
+                    obstacles.push(new Obstacle());
+                }
+            }
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obs = obstacles[i];
+                obs.update();
+                obs.draw();
+
+                const padding = 6;
+                if (
+                    dino.x + padding < obs.x + obs.width &&
+                    dino.x + dino.width - padding > obs.x &&
+                    dino.y + padding < obs.y + obs.height &&
+                    dino.y + dino.height - padding > obs.y
+                ) {
+                    gameOver();
+                    return;
+                }
+
+                if (obs.x + obs.width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            score += 1;
+            if (score % 100 === 0) {
+                soundFX.playScore();
+                gameSpeed += 0.4;
+            }
+
+            document.getElementById('score-display').innerText = String(score).padStart(5, '0');
+            document.getElementById('speed-display').innerText = `SPEED: ${ (gameSpeed / 5).toFixed(1) }x`;
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            soundFX.init();
+            isGameRunning = true;
+            score = 0;
+            gameSpeed = 5;
+            frameCount = 0;
+            obstacles = [];
+            dino.y = 200;
+            dino.velocityY = 0;
+            dino.isGrounded = true;
+
+            document.getElementById('game-overlay').classList.add('hidden');
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            gameLoop();
+        }
+
+        function gameOver() {
+            isGameRunning = false;
+            soundFX.playHit();
+
+            if (score > highScore) {
+                highScore = score;
+                document.getElementById('highscore-display').innerText = `HI: ${String(highScore).padStart(5, '0')}`;
+            }
+
+            document.getElementById('overlay-title').innerText = 'GAME OVER';
+            document.getElementById('overlay-subtitle').innerText = `最終得分: ${score} 分！再試一次或微調 AI 模型動作。`;
+            document.getElementById('btn-start-game').innerText = 'RESTART';
+            document.getElementById('game-overlay').classList.remove('hidden');
+        }
+
+        function triggerJumpVisualEffect() {
+            const container = document.getElementById('game-container');
+            container.classList.add('jump-flash');
+            setTimeout(() => container.classList.remove('jump-flash'), 250);
+        }
+
+        /* ------------------------------------------------------------------
+           3. Teachable Machine & Camera Logic
+        ------------------------------------------------------------------ */
+        let tmModel = null;
+        let maxPredictions = 0;
+        let isAiActive = false;
+        let modelType = 'pose';
+
+        const btnLoadModel = document.getElementById('btn-load-model');
+        const modelUrlInput = document.getElementById('model-url-input');
+        const modelStatusBadge = document.getElementById('model-status-badge');
+        const predictionBarsContainer = document.getElementById('prediction-bars-container');
+        const actionLabel = document.getElementById('action-label');
+        const detectedActionBadge = document.getElementById('detected-action-badge');
+
+        function setupPredictionUI() {
+            predictionBarsContainer.innerHTML = '';
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = tmModel.getClassLabels()[i] || `Class ${i}`;
+                const row = document.createElement('div');
+                row.className = 'flex flex-col gap-1 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800';
+                row.innerHTML = `
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-300 font-bold">${className}</span>
+                        <span id="prob-val-${i}" class="text-emerald-400 font-mono">0%</span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                        <div id="prob-bar-${i}" class="bg-indigo-500 h-2.5 rounded-full transition-all duration-100" style="width: 0%"></div>
+                    </div>
+                `;
+                predictionBarsContainer.appendChild(row);
+            }
+        }
+
+        btnLoadModel.addEventListener('click', async () => {
+            let url = modelUrlInput.value.trim();
+            if (!url) {
+                alert('請輸入有效的 Teachable Machine 模型網址！');
+                return;
+            }
+
+            if (!url.endsWith('/')) url += '/';
+
+            btnLoadModel.disabled = true;
+            btnLoadModel.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> 載入中...';
+            modelStatusBadge.innerText = '載入模型中...';
+            modelStatusBadge.className = 'text-xs px-2.5 py-1 rounded-full bg-amber-950 text-amber-400 border border-amber-800';
+
+            try {
+                const modelURL = url + 'model.json';
+                const metadataURL = url + 'metadata.json';
+
+                try {
+                    if (typeof tmPose !== 'undefined') {
+                        tmModel = await tmPose.load(modelURL, metadataURL);
+                        modelType = 'pose';
+                    } else {
+                        throw new Error('tmPose is not defined');
+                    }
+                } catch (poseErr) {
+                    console.log('Pose load failed, trying Image model...', poseErr);
+                    if (typeof tmImage !== 'undefined') {
+                        tmModel = await tmImage.load(modelURL, metadataURL);
+                        modelType = 'image';
+                    } else {
+                        throw new Error('Both tmPose and tmImage libraries are not available.');
+                    }
+                }
+
+                maxPredictions = tmModel.getTotalClasses();
+
+                modelStatusBadge.innerText = `已載入 (${modelType.toUpperCase()})`;
+                modelStatusBadge.className = 'text-xs px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800';
+
+                setupPredictionUI();
+
+                if (!isAiActive) {
+                    await setupWebcam();
+                }
+
+            } catch (err) {
+                console.error('Model Load Error:', err);
+                modelStatusBadge.innerText = '載入失敗';
+                modelStatusBadge.className = 'text-xs px-2.5 py-1 rounded-full bg-rose-950 text-rose-400 border border-rose-800';
+                alert('無法載入模型！請確認網址是否正確，且您的 Teachable Machine 專案已經點選「Export Model -> Upload」產生存取連結。');
+            } finally {
+                btnLoadModel.disabled = false;
+                btnLoadModel.innerHTML = '<i class="fa-solid fa-cloud-arrow-down"></i> 載入';
+            }
+        });
+
+        async function setupWebcam(facingMode = 'user') {
+            const videoEl = document.getElementById('webcam-video');
+            const placeholder = document.getElementById('cam-placeholder');
+            const troubleshootBox = document.getElementById('cam-troubleshoot');
+
+            if (videoEl.srcObject) {
+                videoEl.srcObject.getTracks().forEach(track => track.stop());
+            }
+
+            try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('瀏覽器不支援相機 API');
+                }
+
+                const constraints = {
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoEl.srcObject = stream;
+                videoEl.classList.remove('hidden');
+                placeholder.classList.add('hidden');
+                detectedActionBadge.classList.remove('hidden');
+                if (troubleshootBox) troubleshootBox.classList.add('hidden');
+
+                isAiActive = true;
+                document.getElementById('btn-toggle-cam').innerText = '關閉鏡頭';
+                document.getElementById('btn-switch-cam').classList.remove('hidden');
+
+                window.requestAnimationFrame(predictLoop);
+
+            } catch (err) {
+                console.error('Webcam Access Error:', err);
+                let errorMsg = '無法取得攝影機權限！';
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    errorMsg = '相機權限被拒絕。請至瀏覽器網址列左側點擊鎖頭圖示，允許本網站使用相機。';
+                } else if (err.name === 'NotFoundError') {
+                    errorMsg = '找不到可用的攝影機裝置。';
+                } else if (err.name === 'NotReadableError') {
+                    errorMsg = '相機可能正被其他應用程式（如 Zoom、Teams）佔用。';
+                }
+                alert(errorMsg);
+                if (troubleshootBox) troubleshootBox.classList.remove('hidden');
+            }
+        }
+
+        async function predictLoop() {
+            if (!isAiActive || !tmModel) return;
+
+            const videoEl = document.getElementById('webcam-video');
+            if (videoEl.readyState === 4) {
+                let prediction = [];
+
+                try {
+                    if (modelType === 'pose') {
+                        const { pose, posenetOutput } = await tmModel.estimatePose(videoEl);
+                        prediction = await tmModel.predict(posenetOutput);
+                    } else {
+                        prediction = await tmModel.predict(videoEl);
+                    }
+                } catch (predictErr) {
+                    console.error('Prediction frame error:', predictErr);
+                }
+
+                let highestProb = 0;
+                let topClass = '';
+
+                for (let i = 0; i < maxPredictions; i++) {
+                    const prob = prediction[i] ? prediction[i].probability : 0;
+                    const classLabel = prediction[i] ? prediction[i].className : `Class ${i}`;
+                    const percent = Math.round(prob * 100);
+
+                    const bar = document.getElementById(`prob-bar-${i}`);
+                    const val = document.getElementById(`prob-val-${i}`);
+
+                    if (bar && val) {
+                        bar.style.width = `${percent}%`;
+                        val.innerText = `${percent}%`;
+
+                        if (prob > 0.7) {
+                            bar.className = 'bg-emerald-400 h-2.5 rounded-full transition-all duration-100';
+                        } else {
+                            bar.className = 'bg-indigo-500 h-2.5 rounded-full transition-all duration-100';
+                        }
+                    }
+
+                    if (prob > highestProb) {
+                        highestProb = prob;
+                        topClass = classLabel;
+                    }
+                }
+
+                if (highestProb > 0.65) {
+                    actionLabel.innerText = `ACTION: ${topClass.toUpperCase()}`;
+
+                    const lowerClass = topClass.toLowerCase();
+                    if (lowerClass.includes('jump') || lowerClass.includes('跳') || lowerClass.includes('up')) {
+                        if (isGameRunning) {
+                            dino.jump();
+                        }
+                    } else if (lowerClass.includes('duck') || lowerClass.includes('蹲') || lowerClass.includes('down')) {
+                        if (isGameRunning) {
+                            dino.duck(true);
+                        }
+                    } else {
+                        if (isGameRunning && dino.isDucking) {
+                            dino.duck(false);
+                        }
+                    }
+                }
+            }
+
+            window.requestAnimationFrame(predictLoop);
+        }
+
+        /* ------------------------------------------------------------------
+           4. Event Listeners & Modal Controls
+        ------------------------------------------------------------------ */
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                if (!isGameRunning && !document.getElementById('game-overlay').classList.contains('hidden')) {
+                    startGame();
+                } else {
+                    dino.jump();
+                }
+            }
+            if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                if (isGameRunning) dino.duck(true);
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowDown') {
+                if (isGameRunning) dino.duck(false);
+            }
+        });
+
+        document.getElementById('btn-start-game').addEventListener('click', startGame);
+
+        let currentFacingMode = 'user';
+        document.getElementById('btn-toggle-cam').addEventListener('click', async () => {
+            if (!isAiActive) {
+                await setupWebcam(currentFacingMode);
+            } else {
+                isAiActive = false;
+                const videoEl = document.getElementById('webcam-video');
+                if (videoEl.srcObject) {
+                    videoEl.srcObject.getTracks().forEach(track => track.stop());
+                }
+                videoEl.classList.add('hidden');
+                document.getElementById('cam-placeholder').classList.remove('hidden');
+                detectedActionBadge.classList.add('hidden');
+                document.getElementById('btn-switch-cam').classList.add('hidden');
+                document.getElementById('btn-toggle-cam').innerText = '開啟鏡頭';
+                const troubleshootBox = document.getElementById('cam-troubleshoot');
+                if (troubleshootBox) troubleshootBox.classList.remove('hidden');
+            }
+        });
+
+        document.getElementById('btn-switch-cam').addEventListener('click', async () => {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            if (isAiActive) {
+                await setupWebcam(currentFacingMode);
+            }
+        });
+
+        document.getElementById('btn-mute').addEventListener('click', () => {
+            soundFX.muted = !soundFX.muted;
+            document.getElementById('mute-icon').className = soundFX.muted ? 'fa-solid fa-volume-xmark' : 'fa-solid fa-volume-high';
+            document.getElementById('mute-text').innerText = soundFX.muted ? '音效: 關' : '音效: 開';
+        });
+
+        const modal = document.getElementById('guide-modal');
+        document.getElementById('btn-guide').addEventListener('click', () => modal.classList.remove('hidden'));
+        document.getElementById('btn-close-modal').addEventListener('click', () => modal.classList.add('hidden'));
+        document.getElementById('btn-modal-ok').addEventListener('click', () => modal.classList.add('hidden'));
+
+        modelUrlInput.value = '';
+    </script>
+</body>
+</html>
